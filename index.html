@@ -29,6 +29,150 @@
   .step-title { font-weight:700; font-size:1.1rem; }
   .board { background:#f0f6f4; border-radius:10px; padding:10px 12px; margin-top:10px; font-size:.95rem; }
   footer { text-align:center; color:#8aa; font-size:.8rem; margin-top:26px; }
+  .ohsnap { background:#fff3f0; border:1px solid #f3c9bf; border-radius:14px; padding:16px; margin-bottom:14px; }
+  .ohsnap b { font-size:1.05rem; }
+  .ohsnap .dismiss { float:right; border:0; background:none; font-size:1.1rem; color:#a55; }
+</style></head><body><div class="wrap">
+<header><div class="logo">SURFCARE</div><div class="sub">Claims — fast &amp; ding-free</div></header>
+<div class="tabs"><button id="tabFile" class="on">File a claim</button><button id="tabStatus">Check status</button></div>
+<div class="ohsnap hide" id="ohsnap"><button class="dismiss" onclick="this.parentElement.classList.add('hide')">&times;</button><b>Oh snap! 🌊</b><br>Something went sideways on our end. Check your connection and try again in a minute — or call (833) FIX-SURF and we'll sort you out.</div>
+
+<div id="paneFile">
+  <div class="card" id="step1">
+    <div class="step-title">Find your coverage</div>
+    <div class="muted">Use the email you bought with, plus your order number or policy number (SC-…).</div>
+    <label>Email</label><input id="f_email" type="email" autocomplete="email" placeholder="you@example.com">
+    <label>Order # or policy #</label><input id="f_ref" type="text" placeholder="#1234 or SC-2026-001000">
+    <button class="btn" id="btnLookup">Find my board</button>
+    <div class="err hide" id="e1"></div>
+  </div>
+  <div class="card hide" id="step2">
+    <div class="step-title">Tell us what happened</div>
+    <div class="board" id="boardInfo"></div>
+    <label>What happened?</label>
+    <select id="f_type">
+      <option value="ding_repair">Ding / crack / pressure damage</option>
+      <option value="board_snapped">Board snapped or buckled</option>
+      <option value="other">Something else</option>
+    </select>
+    <label>Describe it</label><textarea id="f_desc" placeholder="Where on the board, and how it happened…"></textarea>
+    <label>Photos (at least 1 — closeup + full board is ideal)</label>
+    <div class="photo-grid" id="grid"><label class="addphoto" for="f_photos">+</label></div>
+    <input id="f_photos" type="file" accept="image/*" capture="environment" multiple class="hide">
+    <button class="btn" id="btnSubmit">Submit claim</button>
+    <div class="muted" id="upnote"></div>
+    <div class="err hide" id="e2"></div>
+  </div>
+  <div class="card hide" id="step3">
+    <div class="step-title">Claim received 🤙</div>
+    <div class="ok-badge">Your claim number is <b id="claimNo"></b>.<br>We review most claims within 1–2 business days and will email you next steps.</div>
+    <div class="muted">Save your claim number — you can check progress any time in the “Check status” tab.</div>
+  </div>
+</div>
+
+<div id="paneStatus" class="hide">
+  <div class="card">
+    <div class="step-title">Check a claim</div>
+    <label>Email</label><input id="s_email" type="email" placeholder="you@example.com">
+    <label>Claim #</label><input id="s_ref" type="text" placeholder="SC-CLM-2026-000100">
+    <button class="btn" id="btnStatus">Check status</button>
+    <div class="err hide" id="e3"></div>
+    <div class="ok-badge hide" id="statusOut"></div>
+  </div>
+</div>
+<footer>Prefer to talk? Call (833) FIX-SURF · Surfcare</footer>
+</div>
+<script>
+const api = (p, b) => fetch('https://zlzrkegapkionvjiinvo.supabase.co/functions/v1/claims/api/' + p, {
+  method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(b)
+}).then(async r => ({ ok: r.ok, body: await r.json() }))
+  .catch(() => { document.getElementById('ohsnap').classList.remove('hide'); window.scrollTo(0,0); return { ok: false, body: { error: 'network' }, network: true }; });
+const $ = (id) => document.getElementById(id);
+let token = null, photoPaths = [];
+
+$('tabFile').onclick = () => { $('tabFile').classList.add('on'); $('tabStatus').classList.remove('on'); $('paneFile').classList.remove('hide'); $('paneStatus').classList.add('hide'); };
+$('tabStatus').onclick = () => { $('tabStatus').classList.add('on'); $('tabFile').classList.remove('on'); $('paneStatus').classList.remove('hide'); $('paneFile').classList.add('hide'); };
+
+$('btnLookup').onclick = async () => {
+  $('e1').classList.add('hide'); $('btnLookup').disabled = true;
+  const r = await api('lookup', { email: $('f_email').value, ref: $('f_ref').value });
+  $('btnLookup').disabled = false;
+  if (r.network) return;
+  if (!r.ok) {
+    $('e1').textContent = r.body.error === 'no_active_policy' ? 'We found your policy but it is not active (' + (r.body.status||'') + '). Call us if that seems wrong.' : 'No coverage found for that email + reference. Double-check both, or call (833) FIX-SURF.';
+    $('e1').classList.remove('hide'); return;
+  }
+  token = r.body.token;
+  $('boardInfo').innerHTML = '<b>' + r.body.board + '</b><br>Policy ' + r.body.policyNumber + ' · covered ' + r.body.coverage;
+  $('step1').classList.add('hide'); $('step2').classList.remove('hide');
+};
+
+$('f_photos').onchange = async (ev) => {
+  const files = [...ev.target.files].slice(0, 6 - photoPaths.length);
+  $('upnote').textContent = 'Uploading ' + files.length + ' photo(s)…';
+  for (const f of files) {
+    const u = await api('upload-url', { token, filename: f.name });
+    if (!u.ok) { $('upnote').textContent = 'Upload failed — try again.'; return; }
+    const put = await fetch(u.body.signedUrl, { method: 'PUT', headers: { 'content-type': f.type || 'image/jpeg' }, body: f });
+    if (!put.ok) { $('upnote').textContent = 'Upload failed — try again.'; return; }
+    photoPaths.push(u.body.path);
+    const img = document.createElement('img'); img.src = URL.createObjectURL(f);
+    $('grid').insertBefore(img, $('grid').lastElementChild);
+  }
+  $('upnote').textContent = photoPaths.length + ' photo(s) attached.';
+};
+
+$('btnSubmit').onclick = async () => {
+  $('e2').classList.add('hide');
+  if (!photoPaths.length) { $('e2').textContent = 'Please add at least one photo of the damage.'; $('e2').classList.remove('hide'); return; }
+  $('btnSubmit').disabled = true;
+  const r = await api('submit', { token, claimType: $('f_type').value, description: $('f_desc').value, photoPaths });
+  $('btnSubmit').disabled = false;
+  if (r.network) return;
+  if (!r.ok) { $('e2').textContent = 'Something went wrong (' + (r.body.error||'') + '). Try again or call us.'; $('e2').classList.remove('hide'); return; }
+  $('claimNo').textContent = r.body.claimNumber;
+  $('step2').classList.add('hide'); $('step3').classList.remove('hide');
+};
+
+$('btnStatus').onclick = async () => {
+  $('e3').classList.add('hide'); $('statusOut').classList.add('hide');
+  const r = await api('status', { email: $('s_email').value, claimNumber: $('s_ref').value });
+  if (r.network) return;
+  if (!r.ok) { $('e3').textContent = 'No claim found for that email + claim number.'; $('e3').classList.remove('hide'); return; }
+  $('statusOut').innerHTML = '<b>' + r.body.claimNumber + '</b> · ' + r.body.board + '<br>Filed ' + new Date(r.body.filedAt).toLocaleDateString() + '<br><b>' + r.body.statusText + '</b>';
+  $('statusOut').classList.remove('hide');
+};
+</script></body></html><!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Surfcare Claims</title>
+<style>
+  :root { --teal:#0b6e6e; --ink:#15302e; --bg:#f6f8f7; --line:#dfe6e4; }
+  * { box-sizing:border-box; margin:0; }
+  body { font:16px/1.5 -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif; background:var(--bg); color:var(--ink); }
+  .wrap { max-width:480px; margin:0 auto; padding:20px 16px 60px; }
+  header { text-align:center; padding:26px 0 18px; }
+  header .logo { font-size:1.5rem; font-weight:800; letter-spacing:-.5px; color:var(--teal); }
+  header .sub { color:#5c716e; font-size:.95rem; margin-top:4px; }
+  .tabs { display:flex; gap:8px; margin:10px 0 18px; }
+  .tabs button { flex:1; padding:11px; border:1px solid var(--line); background:#fff; border-radius:10px; font-weight:600; font-size:.95rem; color:#5c716e; }
+  .tabs button.on { background:var(--teal); border-color:var(--teal); color:#fff; }
+  .card { background:#fff; border:1px solid var(--line); border-radius:14px; padding:18px; margin-bottom:14px; }
+  label { display:block; font-weight:600; font-size:.9rem; margin:12px 0 5px; }
+  input[type=text], input[type=email], select, textarea { width:100%; padding:12px; border:1px solid var(--line); border-radius:10px; font-size:1rem; background:#fff; }
+  textarea { min-height:90px; resize:vertical; }
+  .btn { width:100%; margin-top:16px; padding:14px; background:var(--teal); color:#fff; border:0; border-radius:10px; font-size:1.05rem; font-weight:700; }
+  .btn[disabled] { opacity:.5; }
+  .muted { color:#5c716e; font-size:.85rem; margin-top:8px; }
+  .err { color:#a33; font-size:.9rem; margin-top:10px; }
+  .ok-badge { background:#e8f4ef; border:1px solid #bfe0d2; border-radius:10px; padding:12px; margin-top:10px; }
+  .photo-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:8px; margin-top:8px; }
+  .photo-grid img { width:100%; aspect-ratio:1; object-fit:cover; border-radius:8px; border:1px solid var(--line); }
+  .addphoto { display:flex; align-items:center; justify-content:center; aspect-ratio:1; border:2px dashed var(--line); border-radius:8px; color:#5c716e; font-size:1.6rem; }
+  .hide { display:none; }
+  .step-title { font-weight:700; font-size:1.1rem; }
+  .board { background:#f0f6f4; border-radius:10px; padding:10px 12px; margin-top:10px; font-size:.95rem; }
+  footer { text-align:center; color:#8aa; font-size:.8rem; margin-top:26px; }
 </style></head><body><div class="wrap">
 <header><div class="logo">SURFCARE</div><div class="sub">Claims — fast &amp; ding-free</div></header>
 <div class="tabs"><button id="tabFile" class="on">File a claim</button><button id="tabStatus">Check status</button></div>
